@@ -2,7 +2,7 @@ import os
 import streamlit as st
 import pypdf
 import chromadb
-from sentence_transformers import SentenceTransformer
+# We no longer import SentenceTransformer
 import google.generativeai as genai
 import time
 
@@ -40,39 +40,28 @@ st.markdown("Upload a PDF and ask questions about it. Built 100% free with Strea
 with st.sidebar:
     st.header("1. Setup")
 
-    # --- MODIFIED PART ---
-    # Read the API key from environment variables (for deployment)
-    # or from Streamlit's secrets (for Streamlit Community Cloud)
     api_key_env = os.environ.get("GOOGLE_API_KEY") or st.secrets.get("GOOGLE_API_KEY")
     
     if api_key_env:
-        # If the key is found in the environment, set it in the session state
         st.session_state.api_key = api_key_env
         st.success("API Key loaded from environment.")
     else:
-        # Fallback to text input if no key is in the environment (for local testing)
         api_key_input = st.text_input("Enter your Google Gemini API Key:", type="password")
         if api_key_input:
             st.session_state.api_key = api_key_input
-    # --- END MODIFIED PART ---
 
     st.header("2. Upload PDF")
-    # File uploader
     uploaded_file = st.file_uploader("Upload your PDF document", type="pdf")
-
-    # The "Process" button
     process_button = st.button("Process Document")
 
 # We use Streamlit's session_state to store variables.
 if "memory" not in st.session_state:
-    st.session_state.memory = None # This will hold our "Retriever"
+    st.session_state.memory = None
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
 # --- PART 1: Processing the PDF (Ingestion & Indexing) ---
-# This block runs ONLY when the user clicks "Process Document"
 if process_button:
-    # --- MODIFIED PART 2: Check for the key from session_state ---
     if not st.session_state.get("api_key"):
         st.error("Please enter your Gemini API Key in the sidebar.")
     elif not uploaded_file:
@@ -81,12 +70,11 @@ if process_button:
         with st.spinner("Processing document... This may take a moment."):
             # 1. Configure the LLM
             try:
-                # Use the key from session state
                 genai.configure(api_key=st.session_state.api_key)
                 llm = genai.GenerativeModel('gemini-flash-latest')
             except Exception as e:
                 st.error(f"Error configuring Google AI: {e}")
-                st.stop() # Stop the app if the key is invalid
+                st.stop()
 
             # 2. Read and Chunk the PDF
             chunks = get_pdf_chunks(uploaded_file)
@@ -96,13 +84,26 @@ if process_button:
 
             st.write(f"PDF processed! Found {len(chunks)} text chunks.")
 
-            # 3. Embeddings
-            st.write("Loading embedding model (runs locally)...")
-            embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            # 3. Embeddings (NEW, FREE, LIGHTWEIGHT METHOD)
+            # We no longer load a model. We use the genai API.
+            st.write("Embedding chunks via Google's API (this is free)...")
+            try:
+                # Use Google's embedding model
+                result = genai.embed_content(
+                    model="models/embedding-001",  # The correct model for this
+                    content=chunks,
+                    task_type="retrieval_document" # Specify the task
+                )
+                embeddings = result['embedding']
+            except Exception as e:
+                st.error(f"Error creating embeddings: {e}")
+                st.stop()
             
+            st.write(f"Successfully embedded {len(embeddings)} chunks.")
+
             # 4. Vector Store
             st.write("Creating vector database (in memory)...")
-            client = chromadb.Client() # This is an in-memory client
+            client = chromadb.Client()
             
             if "pdf_collection" in [c.name for c in client.list_collections()]:
                 client.delete_collection(name="pdf_collection")
@@ -110,64 +111,67 @@ if process_button:
 
             # 5. Add Chunks to Vector Store
             st.write("Embedding chunks and loading into vector store...")
-            embeddings = embedding_model.encode(chunks)
             
             collection.add(
                 documents=chunks,
-                embeddings=list(embeddings),
-                ids=[str(i) for i in range(len(chunks))] # Simple IDs
+                embeddings=embeddings, # Use the embeddings from the API
+                ids=[str(i) for i in range(len(chunks))]
             )
             
             # 6. Save "Retriever" to session memory
+            # We NO LONGER save the embedding_model
             st.session_state.memory = {
                 "collection": collection,
-                "embedding_model": embedding_model,
                 "llm": llm
             }
             
-            # Clear chat history for the new document
             st.session_state.chat_history = []
-            
             st.success("Document processed! You can now ask questions.")
-            time.sleep(1) # Give a small pause
 
 # --- PART 2: The Chat Interface ---
 st.subheader("Chat with your Document")
 
-# Display past chat history
 for role, text in st.session_state.chat_history:
     with st.chat_message(role):
         st.markdown(text)
 
-# The user enters a new prompt
 user_query = st.chat_input("Ask a question about your document...")
 
 if user_query:
-    # --- MODIFIED PART 3: Check for key and memory ---
     if st.session_state.memory is None:
         st.error("Please upload and process a document first.")
-    elif not st.session_state.get("api_key"): # Also check for the key
+    elif not st.session_state.get("api_key"):
         st.error("API Key not configured. Please enter it in the sidebar.")
     else:
-        # Add user's message to chat history
         st.session_state.chat_history.append(("user", user_query))
         with st.chat_message("user"):
             st.markdown(user_query)
 
-        # Show a "thinking" spinner
         with st.spinner("Thinking..."):
             
             # 1. Retrieve: Get relevant context
             collection = st.session_state.memory["collection"]
-            embedding_model = st.session_state.memory["embedding_model"]
             llm = st.session_state.memory["llm"]
 
-            query_embedding = embedding_model.encode([user_query])
-            
+            # --- MODIFIED PART: Embed the user's query ---
+            # We use the same API to embed the query
+            try:
+                query_result = genai.embed_content(
+                    model="models/embedding-001",
+                    content=user_query,
+                    task_type="retrieval_query" # Specify the task
+                )
+                query_embedding = query_result['embedding']
+            except Exception as e:
+                st.error(f"Error embedding query: {e}")
+                st.stop()
+
+            # Query the vector store
             try:
                 results = collection.query(
-                    query_embeddings=list(query_embedding),
-                    n_results=3 # Get top 3 most relevant chunks
+                    # Use the new query_embedding
+                    query_embeddings=[query_embedding], 
+                    n_results=3
                 )
                 context = "\n".join(results['documents'][0])
             except Exception as e:
@@ -191,8 +195,6 @@ if user_query:
             try:
                 response = llm.generate_content(prompt)
                 answer = response.text
-
-                # Add assistant's response to chat history
                 st.session_state.chat_history.append(("assistant", answer))
                 with st.chat_message("assistant"):
                     st.markdown(answer)
