@@ -1,4 +1,5 @@
 streamlit
 pypdf
 chromadb
+sentence-transformers
 google-generativeai
