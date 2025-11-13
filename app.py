@@ -135,7 +135,7 @@ if user_query:
             
             # 1. Retrieve: Get relevant context
             collection = st.session_state.memory["collection"]
-            embedding__model = st.session_state.memory["embedding_model"] # Get model from memory
+            embedding_model = st.session_state.memory["embedding_model"] # Get model from memory
             llm = st.session_state.memory["llm"]
 
             # Embed the query LOCALLY
