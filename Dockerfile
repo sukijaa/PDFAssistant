@@ -20,5 +20,5 @@ EXPOSE 8501
 # We use "healthcheck" to make sure Streamlit is running
 HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
 
-# This command runs your app
+# This command runs app
 CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
